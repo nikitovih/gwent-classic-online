@@ -498,8 +498,10 @@ class OnlineManager {
 		// 
 		// Fix: after creation, we re-assign UIDs based on the *shuffled deck position*
 		// which is the same data on both sides (exchanged during READY/START).
+		isInitializingDecks = true;
 		player_me = new Player(0, this.playerName, me_deck);
 		player_op = new Player(1, this.opponentName, op_deck);
+		isInitializingDecks = false;
 
 		// Re-assign deterministic UIDs.
 		// "my" deck cards get UIDs 1000 .. 1000+N-1 (based on myShuffledCards order)
@@ -558,10 +560,8 @@ class OnlineManager {
 		game.firstPlayer = firstPlayerObj;
 
 		// Start game
-		isInitializingDecks = true;
 		dm.elem.classList.add("hide");
 		game.startGame();
-		isInitializingDecks = false;
 	}
 }
 
