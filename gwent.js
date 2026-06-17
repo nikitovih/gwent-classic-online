@@ -1491,10 +1491,10 @@ class Game {
 		await this.runEffects(this.gameStart);
 		await this.coinToss();
 		AudioManager.playSFX('redraw');
-		await Promise.all([...Array(10).keys()].map( async () => {
+		for (let i = 0; i < 10; i++) {
 			await player_me.deck.draw(player_me.hand);
 			await player_op.deck.draw(player_op.hand);
-		}));
+		}
 		AudioManager.playSFX("game_start");
 		await this.initialRedraw();
 		this.currPlayer = this.firstPlayer;

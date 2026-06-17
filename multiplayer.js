@@ -276,7 +276,7 @@ class OnlineManager {
 	}
 
 	handleMessage(data) {
-		console.log('Received Message:', data);
+		console.log('Received Message:', JSON.stringify(data));
 		switch (data.type) {
 			case 'HANDSHAKE':
 				this.opponentName = data.name;
