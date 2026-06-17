@@ -334,9 +334,8 @@ class OnlineManager {
 						player_op.endTurn();
 						return;
 					}
-					let row = board.row[5 - data.rowIndex];
-					await board.moveTo(card, row, player_op.hand);
-					player_op.endTurn();
+					let row = data.rowIndex === -1 ? weather : board.row[5 - data.rowIndex];
+					await player_op.playCardAction(card, async () => await board.moveTo(card, row, player_op.hand));
 				});
 				break;
 				
@@ -348,8 +347,7 @@ class OnlineManager {
 						player_op.endTurn();
 						return;
 					}
-					await ability_dict["scorch"].activated(card);
-					player_op.endTurn();
+					await player_op.playCardAction(card, async () => await ability_dict["scorch"].activated(card));
 				});
 				break;
 				
@@ -508,6 +506,10 @@ class OnlineManager {
 	startGameMultiplayer(firstPlayerVal) {
 		this.pendingResolvers = {};
 		this.bufferedChoices = {};
+		this.myReady = false;
+		this.opponentReady = false;
+		this.myRedrawDone = false;
+		this.opponentRedrawDone = false;
 		// Reset the Card UID counter so UIDs are deterministic
 		Card._nextUid = 0;
 
@@ -712,27 +714,40 @@ Player.prototype.activateLeader = function() {
 	return originalActivateLeader.call(this);
 };
 
-// Sync playing standard unit cards or weather cards - now uses card UID
-const originalSelectRow = UI.prototype.selectRow;
-UI.prototype.selectRow = async function(row) {
-	if (online.isMultiplayer && this.previewCard && !isSimulatingRemoteMove) {
-		let card = this.previewCard;
-		let rowIndex = board.row.indexOf(row);
-		
-		if (card.name === "Scorch") {
-			online.sendAction({
-				type: 'SCORCH',
-				cardUid: card.uid
-			});
-		} else if (card.name !== "Decoy") {
-			online.sendAction({
-				type: 'PLAY_CARD',
-				cardUid: card.uid,
-				rowIndex: rowIndex
-			});
-		}
+// Sync playing standard unit cards or weather cards - now uses card UID and sent after placement
+const originalPlayCardAction = Player.prototype.playCardAction;
+Player.prototype.playCardAction = async function(card, action) {
+	if (!online.isMultiplayer) {
+		return await originalPlayCardAction.call(this, card, action);
 	}
-	return await originalSelectRow.call(this, row);
+	
+	if (isSimulatingRemoteMove) {
+		await action();
+		this.endTurn();
+		return;
+	}
+
+	ui.showPreviewVisuals(card);
+	await sleep(1000);
+	ui.hidePreview(card);
+	
+	await action();
+	
+	let rowIndex = board.row.indexOf(ui.lastRow);
+	if (card.name === "Scorch") {
+		online.sendAction({
+			type: 'SCORCH',
+			cardUid: card.uid
+		});
+	} else if (card.name !== "Decoy") {
+		online.sendAction({
+			type: 'PLAY_CARD',
+			cardUid: card.uid,
+			rowIndex: rowIndex
+		});
+	}
+	
+	this.endTurn();
 };
 
 // Sync decoy swap - now uses card UID for decoy identification
