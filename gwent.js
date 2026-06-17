@@ -1711,6 +1711,7 @@ class Game {
 class Card {
 
 	constructor(card_data, player) {
+		this.uid = Card._nextUid++;
 		this.name = card_data.name;
 		this.basePower = this.power = Number(card_data.strength);
 		this.faction = card_data.deck;
@@ -1925,6 +1926,7 @@ class Card {
 		return Card.expandIDCounts(card_id_list).map(e => new Card(e, player));
 	}
 }
+Card._nextUid = 0;
 
 // Handles notifications and client interration with menus
 class UI {

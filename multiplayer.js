@@ -21,6 +21,31 @@ class ControllerOnline {
 	}
 }
 
+// Helper: find a card by its uid in a container (hand, deck, grave, row)
+function findCardByUid(container, uid) {
+	if (!container || !container.cards) return null;
+	return container.cards.find(c => c.uid === uid) || null;
+}
+
+// Helper: find a card by uid across all opponent containers
+function findOpCardByUid(uid) {
+	// Search hand first (most common)
+	let card = findCardByUid(player_op.hand, uid);
+	if (card) return { card, source: player_op.hand };
+	// Search deck
+	card = findCardByUid(player_op.deck, uid);
+	if (card) return { card, source: player_op.deck };
+	// Search grave
+	card = findCardByUid(player_op.grave, uid);
+	if (card) return { card, source: player_op.grave };
+	// Search board rows
+	for (let row of board.row) {
+		card = findCardByUid(row, uid);
+		if (card) return { card, source: row };
+	}
+	return null;
+}
+
 class OnlineManager {
 	constructor() {
 		this.peer = null;
@@ -296,7 +321,11 @@ class OnlineManager {
 				
 			case 'PLAY_CARD':
 				this.executeRemoteMove(async () => {
-					let card = player_op.hand.cards[data.handIndex];
+					let card = findCardByUid(player_op.hand, data.cardUid);
+					if (!card) {
+						console.error('PLAY_CARD: card not found with uid', data.cardUid);
+						return;
+					}
 					let row = board.row[5 - data.rowIndex];
 					await board.moveTo(card, row, player_op.hand);
 					player_op.endTurn();
@@ -305,7 +334,11 @@ class OnlineManager {
 				
 			case 'SCORCH':
 				this.executeRemoteMove(async () => {
-					let card = player_op.hand.cards[data.cardHandIndex];
+					let card = findCardByUid(player_op.hand, data.cardUid);
+					if (!card) {
+						console.error('SCORCH: card not found with uid', data.cardUid);
+						return;
+					}
 					await ability_dict["scorch"].activated(card);
 					player_op.endTurn();
 				});
@@ -313,7 +346,11 @@ class OnlineManager {
 				
 			case 'DECOY':
 				this.executeRemoteMove(async () => {
-					let decoy = player_op.hand.cards[data.decoyHandIndex];
+					let decoy = findCardByUid(player_op.hand, data.decoyUid);
+					if (!decoy) {
+						console.error('DECOY: decoy card not found with uid', data.decoyUid);
+						return;
+					}
 					let row = board.row[5 - data.targetRowIndex];
 					let target = row.cards[data.targetCardIndexInRow];
 					board.toHand(target, row);
@@ -341,7 +378,12 @@ class OnlineManager {
 			case 'REDRAW':
 				this.executeRemoteMove(async () => {
 					nextInsertIndex = data.deckInsertIndex;
-					player_op.deck.swap(player_op.hand, player_op.hand.cards[data.handIndex]);
+					let card = findCardByUid(player_op.hand, data.cardUid);
+					if (!card) {
+						console.error('REDRAW: card not found with uid', data.cardUid);
+						return;
+					}
+					player_op.deck.swap(player_op.hand, card);
 				});
 				break;
 				
@@ -433,6 +475,9 @@ class OnlineManager {
 	}
 
 	startGameMultiplayer(firstPlayerVal) {
+		// Reset the Card UID counter so UIDs are deterministic
+		Card._nextUid = 0;
+
 		// me_deck cards are pre-shuffled lists
 		const me_deck = {
 			faction: this.myFaction,
@@ -446,8 +491,59 @@ class OnlineManager {
 			cards: this.opponentShuffledCards.map(idx => ({ index: idx, count: 1 }))
 		};
 
+		// Create players - cards get auto-assigned UIDs via the counter.
+		// Player 0 (me) is always created first, then Player 1 (op).
+		// Both sides create players in the same me-then-op order, but "me" is
+		// a different physical player on each side. So auto-assigned UIDs differ.
+		// 
+		// Fix: after creation, we re-assign UIDs based on the *shuffled deck position*
+		// which is the same data on both sides (exchanged during READY/START).
 		player_me = new Player(0, this.playerName, me_deck);
 		player_op = new Player(1, this.opponentName, op_deck);
+
+		// Re-assign deterministic UIDs.
+		// "my" deck cards get UIDs 1000 .. 1000+N-1 (based on myShuffledCards order)
+		// "op" deck cards get UIDs 2000 .. 2000+M-1 (based on opponentShuffledCards order)
+		// Leader UIDs: me=0, op=500
+		// This way, a card at position i in myShuffledCards always gets uid 1000+i
+		// regardless of which physical player is "me" vs "op" on each side.
+		//
+		// On Host:  myShuffledCards = host's deck → uids 1000+i
+		//           opponentShuffledCards = guest's deck → uids 2000+i
+		// On Guest: myShuffledCards = guest's deck → uids 1000+i (WRONG - guest's deck is 2000+i on host)
+		//
+		// So we need a different scheme: assign UIDs based on FACTION/SOURCE, not me/op.
+		// Better: use the shuffled card *dict indices* themselves as the basis.
+		// Since card_dict indices are globally unique per card type, but duplicates exist...
+		//
+		// Simplest correct approach: On Host, me=host, op=guest.
+		//   Host's cards get UIDs starting from 1000, Guest's from 2000.
+		// On Guest, me=guest, op=host.
+		//   Guest needs HOST's cards to have UIDs from 1000, GUEST's from 2000.
+		// But Guest's "me" IS the guest, whose cards should be 2000+i...
+		//
+		// The fix: assign UIDs based on isHost flag.
+		// Host side: player_me cards → "host" UIDs, player_op cards → "guest" UIDs
+		// Guest side: player_me cards → "guest" UIDs, player_op cards → "host" UIDs
+		
+		const hostBase = 1000;
+		const guestBase = 2000;
+		
+		const myBase = this.isHost ? hostBase : guestBase;
+		const opBase = this.isHost ? guestBase : hostBase;
+		
+		// Assign UIDs to leader
+		player_me.leader.uid = myBase;
+		player_op.leader.uid = opBase;
+		
+		// Assign UIDs to deck cards based on their position in the shuffled deck
+		// Both sides have the same shuffled arrays, so deck position → UID mapping is consistent
+		player_me.deck.cards.forEach((card, i) => {
+			card.uid = myBase + 1 + i;
+		});
+		player_op.deck.cards.forEach((card, i) => {
+			card.uid = opBase + 1 + i;
+		});
 
 		player_op.controller = new ControllerOnline(player_op);
 
@@ -478,15 +574,6 @@ let isInitializingDecks = false;
 let isSimulatingRemoteMove = false;
 let nextInsertIndex = null;
 
-// Force HandAI to sort cards in the same way as Hand, keeping index alignments in sync
-HandAI.prototype.addCard = function(card, index) {
-	if (!index)
-		this.addCardSorted(card);
-	else
-		CardContainer.prototype.addCard.call(this, card, index);
-	this.resize();
-};
-
 // Prevent random insertions during deck initializations or sync insertions
 const originalAddCardRandom = CardContainer.prototype.addCardRandom;
 CardContainer.prototype.addCardRandom = function(card) {
@@ -508,26 +595,25 @@ CardContainer.prototype.addCardRandom = function(card) {
 	return originalAddCardRandom.call(this, card);
 };
 
-// Sync deck swap / redraw
+// Sync deck swap / redraw - now uses card UID instead of hand index
 const originalSwap = Deck.prototype.swap;
 Deck.prototype.swap = function(container, card) {
 	if (!online.isMultiplayer) {
 		return originalSwap.call(this, container, card);
 	}
 	
-	const index = container.cards.indexOf(card);
 	const removedCard = container.removeCard(card);
 	const insertedIndex = this.addCardRandom(removedCard);
 	this.addCardElement();
 	this.resize();
 	
 	const drawnCard = this.removeCard(0);
-	container.addCard(drawnCard, index);
+	container.addCard(drawnCard);
 	
 	if (container === player_me.hand) {
 		online.sendAction({
 			type: 'REDRAW',
-			handIndex: index,
+			cardUid: card.uid,
 			deckInsertIndex: insertedIndex
 		});
 	}
@@ -593,23 +679,22 @@ Player.prototype.activateLeader = function() {
 	return originalActivateLeader.call(this);
 };
 
-// Sync playing standard unit cards or weather cards
+// Sync playing standard unit cards or weather cards - now uses card UID
 const originalSelectRow = UI.prototype.selectRow;
 UI.prototype.selectRow = async function(row) {
 	if (online.isMultiplayer && this.previewCard && !isSimulatingRemoteMove) {
 		let card = this.previewCard;
-		let handIndex = card.holder.hand.cards.indexOf(card);
 		let rowIndex = board.row.indexOf(row);
 		
 		if (card.name === "Scorch") {
 			online.sendAction({
 				type: 'SCORCH',
-				cardHandIndex: handIndex
+				cardUid: card.uid
 			});
 		} else if (card.name !== "Decoy") {
 			online.sendAction({
 				type: 'PLAY_CARD',
-				handIndex: handIndex,
+				cardUid: card.uid,
 				rowIndex: rowIndex
 			});
 		}
@@ -617,18 +702,18 @@ UI.prototype.selectRow = async function(row) {
 	return await originalSelectRow.call(this, row);
 };
 
-// Sync decoy swap
+// Sync decoy swap - now uses card UID for decoy identification
 const originalSelectCard = UI.prototype.selectCard;
 UI.prototype.selectCard = async function(card) {
 	if (online.isMultiplayer && this.previewCard && this.previewCard.name === "Decoy" && !isSimulatingRemoteMove) {
-		let decoyHandIndex = this.previewCard.holder.hand.cards.indexOf(this.previewCard);
+		let decoyUid = this.previewCard.uid;
 		let targetRow = this.lastRow;
 		let targetRowIndex = board.row.indexOf(targetRow);
 		let targetCardIndexInRow = targetRow.cards.indexOf(card);
 		
 		online.sendAction({
 			type: 'DECOY',
-			decoyHandIndex: decoyHandIndex,
+			decoyUid: decoyUid,
 			targetRowIndex: targetRowIndex,
 			targetCardIndexInRow: targetCardIndexInRow
 		});
