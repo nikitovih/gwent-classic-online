@@ -139,10 +139,16 @@ class OnlineManager {
 		const urlParams = new URLSearchParams(window.location.search);
 		const room = urlParams.get('room');
 		if (room) {
-			this.showStep('mp-step-online');
-			document.getElementById('mp-join-room-id').value = room;
-			// We delay auto-joining slightly to make sure DOM is fully ready
-			setTimeout(() => this.joinMatch(room), 500);
+			this.showStep('mp-step-mode');
+			document.getElementById('btn-play-ai').classList.add('hide');
+			document.getElementById('btn-play-online').classList.add('hide');
+			
+			const inviteBtn = document.getElementById('btn-join-invite');
+			inviteBtn.classList.remove('hide');
+			inviteBtn.addEventListener('click', () => {
+				document.getElementById('mp-join-room-id').value = room;
+				this.joinMatch(room);
+			});
 		}
 	}
 
