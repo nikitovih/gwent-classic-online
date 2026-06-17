@@ -27,22 +27,115 @@ function findCardByUid(container, uid) {
 	return container.cards.find(c => c.uid === uid) || null;
 }
 
-// Helper: find a card by uid across all opponent containers
-function findOpCardByUid(uid) {
-	// Search hand first (most common)
-	let card = findCardByUid(player_op.hand, uid);
-	if (card) return { card, source: player_op.hand };
-	// Search deck
-	card = findCardByUid(player_op.deck, uid);
-	if (card) return { card, source: player_op.deck };
-	// Search grave
-	card = findCardByUid(player_op.grave, uid);
-	if (card) return { card, source: player_op.grave };
-	// Search board rows
-	for (let row of board.row) {
-		card = findCardByUid(row, uid);
-		if (card) return { card, source: row };
+// Helper: search globally for a card by its UID
+function findCardByUidGlobal(uid) {
+	if (typeof player_me !== 'undefined' && player_me && player_me.leader && player_me.leader.uid === uid) return player_me.leader;
+	if (typeof player_op !== 'undefined' && player_op && player_op.leader && player_op.leader.uid === uid) return player_op.leader;
+	
+	const containers = [];
+	if (typeof player_me !== 'undefined' && player_me) {
+		containers.push(player_me.hand, player_me.deck, player_me.grave);
 	}
+	if (typeof player_op !== 'undefined' && player_op) {
+		containers.push(player_op.hand, player_op.deck, player_op.grave);
+	}
+	if (typeof weather !== 'undefined' && weather) {
+		containers.push(weather);
+	}
+	if (typeof board !== 'undefined' && board && board.row) {
+		board.row.forEach(r => containers.push(r));
+	}
+	
+	for (let container of containers) {
+		if (container && container.cards) {
+			let card = container.cards.find(c => c.uid === uid);
+			if (card) return card;
+		}
+	}
+	return null;
+}
+
+// Helper: search globally for a card by its name
+function findCardByNameGlobal(name, owner) {
+	const players = [];
+	if (owner) {
+		players.push(owner, owner.opponent());
+	} else {
+		if (typeof player_me !== 'undefined' && player_me) players.push(player_me);
+		if (typeof player_op !== 'undefined' && player_op) players.push(player_op);
+	}
+	
+	for (let player of players) {
+		if (!player) continue;
+		const containers = [player.hand, player.deck, player.grave];
+		for (let container of containers) {
+			if (container && container.cards) {
+				let card = container.cards.find(c => c.name === name);
+				if (card) return card;
+			}
+		}
+	}
+	
+	if (typeof board !== 'undefined' && board && board.row) {
+		for (let row of board.row) {
+			let card = row.cards.find(c => c.name === name);
+			if (card) return card;
+		}
+	}
+	
+	if (typeof weather !== 'undefined' && weather && weather.cards) {
+		let card = weather.cards.find(c => c.name === name);
+		if (card) return card;
+	}
+	return null;
+}
+
+// Helper: look up a card by UID with name verification and container/global fallbacks
+function getCardByUidWithNameFallback(uid, name, container, owner) {
+	if (!container || !container.cards) {
+		let card = findCardByUidGlobal(uid);
+		if (card && card.name === name) return card;
+		return findCardByNameGlobal(name, owner);
+	}
+	
+	// 1. Search container by UID
+	let card = container.cards.find(c => c.uid === uid);
+	if (card) {
+		if (card.name === name) {
+			return card;
+		} else {
+			console.warn(`Card mismatch: UID ${uid} in container is ${card.name} but expected ${name}.`);
+		}
+	}
+	
+	// 2. Search container by name
+	card = container.cards.find(c => c.name === name);
+	if (card) {
+		console.warn(`Fallback: found card by name "${name}" in container instead of UID ${uid}.`);
+		return card;
+	}
+	
+	// 3. Search globally by UID
+	card = findCardByUidGlobal(uid);
+	if (card && card.name === name) {
+		console.warn(`Fallback: found card by UID ${uid} globally instead of in container.`);
+		return card;
+	}
+	
+	// 4. Search globally by name
+	card = findCardByNameGlobal(name, owner);
+	if (card) {
+		console.warn(`Fallback: found card by name "${name}" globally.`);
+		return card;
+	}
+	
+	// Last resort: return first card in container
+	if (container.cards.length > 0) {
+		console.error(`Severe fallback: card "${name}" (UID ${uid}) not found anywhere. Returning first card in container: ${container.cards[0].name}`);
+		return container.cards[0];
+	}
+	
+	console.error(`Severe error: card "${name}" (UID ${uid}) not found anywhere and container is empty.`);
 	return null;
 }
 
@@ -181,20 +274,11 @@ class OnlineManager {
 		this.peer = null;
 		this.conn = null;
 		this.isMultiplayer = false;
-		this.myReady = false;
-		this.opponentReady = false;
-		this.myRedrawDone = false;
-		this.opponentRedrawDone = false;
+		
+		this.resetLobbyState();
 		
 		document.getElementById('mp-room-info').classList.add('hide');
 		document.getElementById('mp-lobby-status-text').textContent = 'Creating room...';
-		
-		// Reset the customization Screen Button
-		const startBtn = document.getElementById('start-game');
-		if (startBtn) {
-			startBtn.textContent = 'Start game';
-			startBtn.disabled = false;
-		}
 
 		// Remove online indicator
 		const indicator = document.getElementById('mp-online-indicator');
@@ -328,22 +412,25 @@ class OnlineManager {
 				
 			case 'PLAY_CARD':
 				this.executeRemoteMove(async () => {
-					let card = findCardByUid(player_op.hand, data.cardUid);
+					let card = getCardByUidWithNameFallback(data.cardUid, data.cardName, player_op.hand, player_op);
 					if (!card) {
-						console.error('PLAY_CARD: card not found with uid', data.cardUid);
+						console.error('PLAY_CARD: card not found', data.cardName);
 						player_op.endTurn();
 						return;
 					}
 					let row = data.rowIndex === -1 ? weather : board.row[5 - data.rowIndex];
-					await player_op.playCardAction(card, async () => await board.moveTo(card, row, player_op.hand));
+					let source = player_op.hand;
+					if (player_op.deck.cards.includes(card)) source = player_op.deck;
+					else if (player_op.grave.cards.includes(card)) source = player_op.grave;
+					await player_op.playCardAction(card, async () => await board.moveTo(card, row, source));
 				});
 				break;
 				
 			case 'SCORCH':
 				this.executeRemoteMove(async () => {
-					let card = findCardByUid(player_op.hand, data.cardUid);
+					let card = getCardByUidWithNameFallback(data.cardUid, data.cardName, player_op.hand, player_op);
 					if (!card) {
-						console.error('SCORCH: card not found with uid', data.cardUid);
+						console.error('SCORCH: card not found', data.cardName);
 						player_op.endTurn();
 						return;
 					}
@@ -353,22 +440,19 @@ class OnlineManager {
 				
 			case 'DECOY':
 				this.executeRemoteMove(async () => {
-					let decoy = findCardByUid(player_op.hand, data.decoyUid);
+					let decoy = getCardByUidWithNameFallback(data.decoyUid, data.decoyName, player_op.hand, player_op);
 					if (!decoy) {
-						console.error('DECOY: decoy card not found with uid', data.decoyUid);
+						console.error('DECOY: decoy card not found', data.decoyName);
 						player_op.endTurn();
 						return;
 					}
 					let row = board.row[5 - data.targetRowIndex];
-					let target = row.cards.find(c => c.uid === data.targetCardUid);
-					if (!target) {
-						target = row.cards[data.targetCardIndexInRow];
-					}
+					let target = getCardByUidWithNameFallback(data.targetCardUid, data.targetCardName, row, player_op.opponent());
 					if (target) {
 						board.toHand(target, row);
 						await board.moveTo(decoy, row, player_op.hand);
 					} else {
-						console.error('DECOY: target card not found with uid', data.targetCardUid, 'or index', data.targetCardIndexInRow, 'in row', 5 - data.targetRowIndex);
+						console.error('DECOY: target card not found', data.targetCardName);
 					}
 					player_op.endTurn();
 				});
@@ -393,9 +477,9 @@ class OnlineManager {
 			case 'REDRAW':
 				this.executeRemoteMove(async () => {
 					nextInsertIndex = data.deckInsertIndex;
-					let card = findCardByUid(player_op.hand, data.cardUid);
+					let card = getCardByUidWithNameFallback(data.cardUid, data.cardName, player_op.hand, player_op);
 					if (!card) {
-						console.error('REDRAW: card not found with uid', data.cardUid);
+						console.error('REDRAW: card not found', data.cardName);
 						return;
 					}
 					player_op.deck.swap(player_op.hand, card);
@@ -500,6 +584,26 @@ class OnlineManager {
 			console.error('Error executing remote move:', e);
 		} finally {
 			isSimulatingRemoteMove = false;
+		}
+	}
+
+	resetLobbyState() {
+		this.myReady = false;
+		this.opponentReady = false;
+		this.myRedrawDone = false;
+		this.opponentRedrawDone = false;
+		this.myShuffledCards = null;
+		this.opponentShuffledCards = null;
+		this.myFaction = null;
+		this.opponentFaction = null;
+		this.myLeaderIndex = null;
+		this.opponentLeaderIndex = null;
+		nextInsertIndex = null;
+
+		const startBtn = document.getElementById('start-game');
+		if (startBtn) {
+			startBtn.textContent = 'Start game';
+			startBtn.disabled = false;
 		}
 	}
 
@@ -630,7 +734,7 @@ CardContainer.prototype.addCardRandom = function(card) {
 	return originalAddCardRandom.call(this, card);
 };
 
-// Sync deck swap / redraw - now uses card UID instead of hand index
+// Sync deck swap / redraw - now uses card UID and name instead of hand index
 const originalSwap = Deck.prototype.swap;
 Deck.prototype.swap = function(container, card) {
 	if (!online.isMultiplayer) {
@@ -649,6 +753,7 @@ Deck.prototype.swap = function(container, card) {
 		online.sendAction({
 			type: 'REDRAW',
 			cardUid: card.uid,
+			cardName: card.name,
 			deckInsertIndex: insertedIndex
 		});
 	}
@@ -714,7 +819,7 @@ Player.prototype.activateLeader = function() {
 	return originalActivateLeader.call(this);
 };
 
-// Sync playing standard unit cards or weather cards - now uses card UID and sent after placement
+// Sync playing standard unit cards or weather cards - now uses card UID, card name, and sent after placement
 const originalPlayCardAction = Player.prototype.playCardAction;
 Player.prototype.playCardAction = async function(card, action) {
 	if (!online.isMultiplayer) {
@@ -737,12 +842,14 @@ Player.prototype.playCardAction = async function(card, action) {
 	if (card.name === "Scorch") {
 		online.sendAction({
 			type: 'SCORCH',
-			cardUid: card.uid
+			cardUid: card.uid,
+			cardName: card.name
 		});
 	} else if (card.name !== "Decoy") {
 		online.sendAction({
 			type: 'PLAY_CARD',
 			cardUid: card.uid,
+			cardName: card.name,
 			rowIndex: rowIndex
 		});
 	}
@@ -750,7 +857,7 @@ Player.prototype.playCardAction = async function(card, action) {
 	this.endTurn();
 };
 
-// Sync decoy swap - now uses card UID for decoy identification
+// Sync decoy swap - now uses card UID and name for decoy and target identification
 const originalSelectCard = UI.prototype.selectCard;
 UI.prototype.selectCard = async function(card) {
 	if (online.isMultiplayer && this.previewCard && this.previewCard.name === "Decoy" && !isSimulatingRemoteMove) {
@@ -762,9 +869,11 @@ UI.prototype.selectCard = async function(card) {
 		online.sendAction({
 			type: 'DECOY',
 			decoyUid: decoyUid,
+			decoyName: this.previewCard.name,
 			targetRowIndex: targetRowIndex,
 			targetCardIndexInRow: targetCardIndexInRow,
-			targetCardUid: card.uid
+			targetCardUid: card.uid,
+			targetCardName: card.name
 		});
 	}
 	return await originalSelectCard.call(this, card);
@@ -792,7 +901,7 @@ Game.prototype.initialRedraw = async function() {
 	await sleepUntil(() => online.opponentRedrawDone === true, 100);
 };
 
-// Sync Carousel Selection
+// Sync Carousel Selection - now with robust card name matching fallbacks
 const originalQueueCarousel = UI.prototype.queueCarousel;
 UI.prototype.queueCarousel = async function(container, count, action, predicate, bSort, bQuit, title) {
 	if (!online.isMultiplayer) {
@@ -803,9 +912,10 @@ UI.prototype.queueCarousel = async function(container, count, action, predicate,
 		// Remote player's turn: wait for choice
 		for (let i = 0; i < count; ++i) {
 			let choice = await online.waitForChoice('carousel');
-			let index = container.cards.findIndex(card => card.uid === choice.cardUid);
+			let card = getCardByUidWithNameFallback(choice.cardUid, choice.cardName, container, game.currPlayer);
+			let index = container.cards.indexOf(card);
 			if (index === -1) {
-				console.error('queueCarousel: card not found with uid', choice.cardUid);
+				console.error('queueCarousel: card not found with name', choice.cardName);
 				index = choice.index !== undefined ? choice.index : 0;
 			}
 			await action(container, index);
@@ -813,10 +923,10 @@ UI.prototype.queueCarousel = async function(container, count, action, predicate,
 		return;
 	}
 	
-	// Local player's turn: wrap callback to capture and send selected card UID
+	// Local player's turn: wrap callback to capture and send selected card UID and name
 	const wrappedAction = async (c, index) => {
 		const card = c.cards[index];
-		online.sendChoice('carousel', { cardUid: card.uid, index: index });
+		online.sendChoice('carousel', { cardUid: card ? card.uid : 0, cardName: card ? card.name : '', index: index });
 		await action(c, index);
 	};
 	
@@ -853,14 +963,12 @@ factions.monsters.factionAbility = function(player) {
 		let card;
 		if (player === player_me) {
 			card = units[Math.floor(Math.random() * units.length)];
-			online.sendChoice('monsters_keep', { cardUid: card.uid, index: units.indexOf(card) });
+			online.sendChoice('monsters_keep', { cardUid: card.uid, cardName: card.name, index: units.indexOf(card) });
 		} else {
 			let choice = await online.waitForChoice('monsters_keep');
-			card = units.find(c => c.uid === choice.cardUid);
-			if (!card) {
-				console.error('Monsters faction ability: card not found with uid', choice.cardUid);
-				card = units[choice.index !== undefined ? choice.index : 0];
-			}
+			let container = new CardContainer();
+			container.cards = units;
+			card = getCardByUidWithNameFallback(choice.cardUid, choice.cardName, container, player);
 		}
 		
 		card.noRemove = true;
@@ -909,14 +1017,10 @@ factions.skellige.helper = async player => {
 		
 	if (player === player_me) {
 		card = units[Math.floor(Math.random() * units.length)];
-		online.sendChoice('skellige_draw', { cardUid: card.uid, cardIndexInGrave: player.grave.cards.indexOf(card) });
+		online.sendChoice('skellige_draw', { cardUid: card.uid, cardName: card.name, cardIndexInGrave: player.grave.cards.indexOf(card) });
 	} else {
 		let choice = await online.waitForChoice('skellige_draw');
-		card = player.grave.cards.find(c => c.uid === choice.cardUid);
-		if (!card) {
-			console.error('Skellige faction ability: card not found with uid', choice.cardUid);
-			card = player.grave.cards[choice.cardIndexInGrave !== undefined ? choice.cardIndexInGrave : 0];
-		}
+		card = getCardByUidWithNameFallback(choice.cardUid, choice.cardName, player.grave, player);
 	}
 	
 	if (card.row === 'agile') {
@@ -952,6 +1056,9 @@ Game.prototype.endGame = async function() {
 
 const originalReturnToCustomization = Game.prototype.returnToCustomization;
 Game.prototype.returnToCustomization = function() {
+	if (online.isMultiplayer) {
+		online.resetLobbyState();
+	}
 	const buttons = this.endScreen.getElementsByTagName("button");
 	if (buttons[1]) buttons[1].classList.remove("hide");
 	if (buttons[2]) buttons[2].classList.remove("hide");
