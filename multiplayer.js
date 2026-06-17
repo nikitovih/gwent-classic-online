@@ -489,6 +489,62 @@ class OnlineManager {
 			case 'REDRAW_DONE':
 				this.opponentRedrawDone = true;
 				break;
+				
+			case 'VERIFY_DECKS':
+				console.log("Received remote deck verification:", data);
+				// remote's opCards is their representation of my deck.
+				// remote's myCards is their representation of their deck.
+				let myActualCards = player_me.deck.cards.map(c => `${c.uid}:${c.name}`);
+				let opActualCards = player_op.deck.cards.map(c => `${c.uid}:${c.name}`);
+				
+				let errs = [];
+				data.opCards.forEach((cDesc, i) => {
+					if (myActualCards[i] !== cDesc) {
+						errs.push(`My deck card ${i} mismatch: Local is ${myActualCards[i] || 'none'}, Remote expects ${cDesc}`);
+					}
+				});
+				data.myCards.forEach((cDesc, i) => {
+					if (opActualCards[i] !== cDesc) {
+						errs.push(`Opponent deck card ${i} mismatch: Local is ${opActualCards[i] || 'none'}, Remote expects ${cDesc}`);
+					}
+				});
+				
+				if (errs.length > 0) {
+					console.error("DECK MISMATCH DETECTED:", errs);
+					console.log("Attempting to align local UIDs with remote expectation...");
+					
+					data.opCards.forEach((cDesc, i) => {
+						if (!cDesc) return;
+						let parts = cDesc.split(':');
+						let uid = parseInt(parts[0]);
+						let name = parts.slice(1).join(':');
+						let localCard = player_me.deck.cards[i];
+						if (localCard) {
+							if (localCard.name !== name) {
+								console.warn(`Align warning: card ${i} name differs: local is ${localCard.name}, remote expects ${name}`);
+							}
+							localCard.uid = uid;
+						}
+					});
+					data.myCards.forEach((cDesc, i) => {
+						if (!cDesc) return;
+						let parts = cDesc.split(':');
+						let uid = parseInt(parts[0]);
+						let name = parts.slice(1).join(':');
+						let localCard = player_op.deck.cards[i];
+						if (localCard) {
+							if (localCard.name !== name) {
+								console.warn(`Align warning: card ${i} name differs: local is ${localCard.name}, remote expects ${name}`);
+							}
+							localCard.uid = uid;
+						}
+					});
+					
+					console.log("UIDs force-aligned to prevent mismatch.");
+				} else {
+					console.log("DECK VERIFICATION SUCCESSFUL! DECKS ARE IN SYNC.");
+				}
+				break;
 		}
 	}
 
@@ -684,6 +740,15 @@ class OnlineManager {
 		});
 		player_op.deck.cards.forEach((card, i) => {
 			card.uid = opBase + 1 + i;
+		});
+
+		// Diagnostic verification check & force-alignment trigger
+		let myCardsDesc = player_me.deck.cards.map(c => `${c.uid}:${c.name}`);
+		let opCardsDesc = player_op.deck.cards.map(c => `${c.uid}:${c.name}`);
+		this.sendAction({
+			type: 'VERIFY_DECKS',
+			myCards: myCardsDesc,
+			opCards: opCardsDesc
 		});
 
 		player_op.controller = new ControllerOnline(player_op);
