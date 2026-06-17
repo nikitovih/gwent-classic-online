@@ -48,7 +48,9 @@ var ability_dict = {
 		description: "Triggers transformation of all Berserker cards on the same row. ",
 		placed: async (card, row) => {
 			const berserkers = row.findCards(c => c.abilities.includes("berserker"));
-			await Promise.all(berserkers.map(async c => await ability_dict["berserker"].placed(c, row)));
+			for (let c of berserkers) {
+				await ability_dict["berserker"].placed(c, row);
+			}
 		}
 	},
 	berserker: {
@@ -92,7 +94,9 @@ var ability_dict = {
 			if (cards.length)
 			{
 				await Promise.all(cards.map( async u => await u[1].animate("scorch", true, false)) );
-				await Promise.all(cards.map( async u => await board.toGrave(u[1], u[0])) );
+				for (let u of cards) {
+					await board.toGrave(u[1], u[0]);
+				}
 			}
 		}
 	},
@@ -131,7 +135,9 @@ var ability_dict = {
 			if (units.length === 0)
 				return;
 			await card.animate("muster");
-			await Promise.all( units.map( async p =>  await board.addCardToRow(p[1], p[1].row, p[1].holder, p[0])));
+			for (let p of units) {
+				await board.addCardToRow(p[1], p[1].row, p[1].holder, p[0]);
+			}
 		}
 	},
 	spy: {
@@ -370,7 +376,9 @@ var ability_dict = {
 			let deck = board.getRow(card, "deck", card.holder);
 			if (card.holder.controller instanceof ControllerAI) {
 				let cards = card.holder.controller.discardOrder(card).splice(0,2).filter(c => c.basePower < 7);
-				await Promise.all(cards.map(async c => await board.toGrave(c, card.holder.hand)));
+				for (let c of cards) {
+					await board.toGrave(c, card.holder.hand);
+				}
 				card.holder.deck.draw(card.holder.hand);
 				return;
 			} else
@@ -448,7 +456,9 @@ var ability_dict = {
 			const close = board.getRow(card, "close");
 			const ranged =  board.getRow(card, "ranged");
 			const solution = ability_dict["francesca_hope"].helper(card);
-			await Promise.all(solution.cards.map(async p => await board.moveTo(p.card, p.row === close ? ranged : close, p.row) ) );
+			for (let p of solution.cards) {
+				await board.moveTo(p.card, p.row === close ? ranged : close, p.row);
+			}
 		},
 		weight: card => {
 			const {score, cards} = ability_dict["francesca_hope"].helper(card);
@@ -501,8 +511,12 @@ var ability_dict = {
 		description: "Shuffle all cards from each player's graveyard back into their decks.",
 		activated: async card => {
 			AudioManager.playSFX('redraw');
-			Promise.all(card.holder.grave.cards.map(c => board.toDeck(c, card.holder.grave)));
-			await Promise.all(card.holder.opponent().grave.cards.map(c => board.toDeck(c, card.holder.opponent().grave)));
+			for (let c of card.holder.grave.cards.slice()) {
+				await board.toDeck(c, card.holder.grave);
+			}
+			for (let c of card.holder.opponent().grave.cards.slice()) {
+				await board.toDeck(c, card.holder.opponent().grave);
+			}
 		},
 		weight: (card, ai, max, data) => {
 			if( game.roundCount < 2)

@@ -67,7 +67,10 @@ var factions = {
 			await ui.notification("skellige-" + player.tag, 1200);
 			if (player.controller instanceof ControllerAI)
 			{
-				await Promise.all(player.grave.findCardsRandom(c => c.isUnit(), 2).map(c => board.toRow(c, player.grave)));
+				const cards = player.grave.findCardsRandom(c => c.isUnit(), 2);
+				for (let c of cards) {
+					await board.toRow(c, player.grave);
+				}
 			}
 			else
 			{

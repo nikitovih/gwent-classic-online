@@ -1178,11 +1178,13 @@ class Row extends CardContainer {
 	
 	// Applies a local scorch effect to this row
 	async scorch() {
-		if (this.total >= 10)
-			await Promise.all( this.maxUnits().map( async c => {
+		if (this.total >= 10) {
+			const units = this.maxUnits();
+			for (let c of units) {
 				await c.animate("scorch", true, false);
 				await board.toGrave(c, this);
-			}));
+			}
+		}
 	}
 	
 	// Removes all cards and effects from this row
@@ -1190,7 +1192,9 @@ class Row extends CardContainer {
 		const toGrave  = this.cards.filter(c => !c.noRemove);
 		if (this.special != null)
 			toGrave.push(this.special);
-		await Promise.all(toGrave.map(async c => await board.toGrave(c, this)));
+		for (let c of toGrave) {
+			await board.toGrave(c, this);
+		}
 	}
 
 	// Returns all regular unit cards with the heighest power
@@ -1279,7 +1283,10 @@ class Weather extends CardContainer {
 	
 	// Removes all weather effects and cards
 	async clearWeather() {
-		await Promise.all(this.cards.map((c,i)=>this.cards[this.cards.length-i-1]).map(async c => await board.toGrave(c, this)));
+		const cards = this.cards.map((c,i)=>this.cards[this.cards.length-i-1]);
+		for (let c of cards) {
+			await board.toGrave(c, this);
+		}
 	}
 	
 	// Override
@@ -1389,10 +1396,10 @@ class Board {
 
 	async clearRound()
 	{
-		await Promise.all([
-			await weather.clearWeather(),
-			...board.row.map(async row => await row.clear())
-		]);
+		await weather.clearWeather();
+		for (let row of board.row) {
+			await row.clear();
+		}
 	}
 }
 

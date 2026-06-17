@@ -324,6 +324,7 @@ class OnlineManager {
 					let card = findCardByUid(player_op.hand, data.cardUid);
 					if (!card) {
 						console.error('PLAY_CARD: card not found with uid', data.cardUid);
+						player_op.endTurn();
 						return;
 					}
 					let row = board.row[5 - data.rowIndex];
@@ -337,6 +338,7 @@ class OnlineManager {
 					let card = findCardByUid(player_op.hand, data.cardUid);
 					if (!card) {
 						console.error('SCORCH: card not found with uid', data.cardUid);
+						player_op.endTurn();
 						return;
 					}
 					await ability_dict["scorch"].activated(card);
@@ -349,12 +351,17 @@ class OnlineManager {
 					let decoy = findCardByUid(player_op.hand, data.decoyUid);
 					if (!decoy) {
 						console.error('DECOY: decoy card not found with uid', data.decoyUid);
+						player_op.endTurn();
 						return;
 					}
 					let row = board.row[5 - data.targetRowIndex];
 					let target = row.cards[data.targetCardIndexInRow];
-					board.toHand(target, row);
-					await board.moveTo(decoy, row, player_op.hand);
+					if (target) {
+						board.toHand(target, row);
+						await board.moveTo(decoy, row, player_op.hand);
+					} else {
+						console.error('DECOY: target card not found at index', data.targetCardIndexInRow, 'in row', 5 - data.targetRowIndex);
+					}
 					player_op.endTurn();
 				});
 				break;
@@ -470,8 +477,13 @@ class OnlineManager {
 
 	async executeRemoteMove(actionFn) {
 		isSimulatingRemoteMove = true;
-		await actionFn();
-		isSimulatingRemoteMove = false;
+		try {
+			await actionFn();
+		} catch (e) {
+			console.error('Error executing remote move:', e);
+		} finally {
+			isSimulatingRemoteMove = false;
+		}
 	}
 
 	startGameMultiplayer(firstPlayerVal) {
