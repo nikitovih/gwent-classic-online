@@ -1397,7 +1397,25 @@ class Board {
 	async clearRound()
 	{
 		await weather.clearWeather();
-		for (let row of board.row) {
+		let rowsToClear;
+		if (window.online && online.isMultiplayer) {
+			if (online.isHost) {
+				// Clear Host rows first, then Guest rows
+				rowsToClear = [
+					board.row[3], board.row[4], board.row[5], // Host rows (me)
+					board.row[2], board.row[1], board.row[0]  // Guest rows (op)
+				];
+			} else {
+				// Clear Host rows first, then Guest rows (on Guest, Host is 'op' i.e. 2, 1, 0)
+				rowsToClear = [
+					board.row[2], board.row[1], board.row[0], // Host rows (op)
+					board.row[3], board.row[4], board.row[5]  // Guest rows (me)
+				];
+			}
+		} else {
+			rowsToClear = board.row;
+		}
+		for (let row of rowsToClear) {
 			await row.clear();
 		}
 	}

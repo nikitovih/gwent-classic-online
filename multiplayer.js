@@ -72,6 +72,7 @@ class OnlineManager {
 		this.opponentRedrawDone = false;
 		
 		this.pendingResolvers = {};
+		this.bufferedChoices = {};
 		
 		this.init();
 	}
@@ -355,12 +356,15 @@ class OnlineManager {
 						return;
 					}
 					let row = board.row[5 - data.targetRowIndex];
-					let target = row.cards[data.targetCardIndexInRow];
+					let target = row.cards.find(c => c.uid === data.targetCardUid);
+					if (!target) {
+						target = row.cards[data.targetCardIndexInRow];
+					}
 					if (target) {
 						board.toHand(target, row);
 						await board.moveTo(decoy, row, player_op.hand);
 					} else {
-						console.error('DECOY: target card not found at index', data.targetCardIndexInRow, 'in row', 5 - data.targetRowIndex);
+						console.error('DECOY: target card not found with uid', data.targetCardUid, 'or index', data.targetCardIndexInRow, 'in row', 5 - data.targetRowIndex);
 					}
 					player_op.endTurn();
 				});
@@ -435,6 +439,10 @@ class OnlineManager {
 
 	waitForChoice(type) {
 		return new Promise((resolve) => {
+			if (this.bufferedChoices[type] && this.bufferedChoices[type].length > 0) {
+				resolve(this.bufferedChoices[type].shift());
+				return;
+			}
 			if (!this.pendingResolvers[type]) {
 				this.pendingResolvers[type] = [];
 			}
@@ -446,6 +454,11 @@ class OnlineManager {
 		if (this.pendingResolvers[type] && this.pendingResolvers[type].length > 0) {
 			let resolve = this.pendingResolvers[type].shift();
 			resolve(data);
+		} else {
+			if (!this.bufferedChoices[type]) {
+				this.bufferedChoices[type] = [];
+			}
+			this.bufferedChoices[type].push(data);
 		}
 	}
 
@@ -487,6 +500,8 @@ class OnlineManager {
 	}
 
 	startGameMultiplayer(firstPlayerVal) {
+		this.pendingResolvers = {};
+		this.bufferedChoices = {};
 		// Reset the Card UID counter so UIDs are deterministic
 		Card._nextUid = 0;
 
@@ -727,7 +742,8 @@ UI.prototype.selectCard = async function(card) {
 			type: 'DECOY',
 			decoyUid: decoyUid,
 			targetRowIndex: targetRowIndex,
-			targetCardIndexInRow: targetCardIndexInRow
+			targetCardIndexInRow: targetCardIndexInRow,
+			targetCardUid: card.uid
 		});
 	}
 	return await originalSelectCard.call(this, card);
@@ -766,14 +782,20 @@ UI.prototype.queueCarousel = async function(container, count, action, predicate,
 		// Remote player's turn: wait for choice
 		for (let i = 0; i < count; ++i) {
 			let choice = await online.waitForChoice('carousel');
-			await action(container, choice.index);
+			let index = container.cards.findIndex(card => card.uid === choice.cardUid);
+			if (index === -1) {
+				console.error('queueCarousel: card not found with uid', choice.cardUid);
+				index = choice.index !== undefined ? choice.index : 0;
+			}
+			await action(container, index);
 		}
 		return;
 	}
 	
-	// Local player's turn: wrap callback to capture and send selected index
+	// Local player's turn: wrap callback to capture and send selected card UID
 	const wrappedAction = async (c, index) => {
-		online.sendChoice('carousel', { index: index });
+		const card = c.cards[index];
+		online.sendChoice('carousel', { cardUid: card.uid, index: index });
 		await action(c, index);
 	};
 	
@@ -810,10 +832,14 @@ factions.monsters.factionAbility = function(player) {
 		let card;
 		if (player === player_me) {
 			card = units[Math.floor(Math.random() * units.length)];
-			online.sendChoice('monsters_keep', { index: units.indexOf(card) });
+			online.sendChoice('monsters_keep', { cardUid: card.uid, index: units.indexOf(card) });
 		} else {
 			let choice = await online.waitForChoice('monsters_keep');
-			card = units[choice.index];
+			card = units.find(c => c.uid === choice.cardUid);
+			if (!card) {
+				console.error('Monsters faction ability: card not found with uid', choice.cardUid);
+				card = units[choice.index !== undefined ? choice.index : 0];
+			}
 		}
 		
 		card.noRemove = true;
@@ -862,10 +888,14 @@ factions.skellige.helper = async player => {
 		
 	if (player === player_me) {
 		card = units[Math.floor(Math.random() * units.length)];
-		online.sendChoice('skellige_draw', { cardIndexInGrave: player.grave.cards.indexOf(card) });
+		online.sendChoice('skellige_draw', { cardUid: card.uid, cardIndexInGrave: player.grave.cards.indexOf(card) });
 	} else {
 		let choice = await online.waitForChoice('skellige_draw');
-		card = player.grave.cards[choice.cardIndexInGrave];
+		card = player.grave.cards.find(c => c.uid === choice.cardUid);
+		if (!card) {
+			console.error('Skellige faction ability: card not found with uid', choice.cardUid);
+			card = player.grave.cards[choice.cardIndexInGrave !== undefined ? choice.cardIndexInGrave : 0];
+		}
 	}
 	
 	if (card.row === 'agile') {

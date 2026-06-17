@@ -93,6 +93,7 @@ var ability_dict = {
 			
 			if (cards.length)
 			{
+				cards.sort((a, b) => a[1].uid - b[1].uid);
 				await Promise.all(cards.map( async u => await u[1].animate("scorch", true, false)) );
 				for (let u of cards) {
 					await board.toGrave(u[1], u[0]);
@@ -134,6 +135,7 @@ var ability_dict = {
 			.concat(card.holder.deck.getCards(pred).map( x => [card.holder.deck, x] ) );
 			if (units.length === 0)
 				return;
+			units.sort((a, b) => a[1].uid - b[1].uid);
 			await card.animate("muster");
 			for (let p of units) {
 				await board.addCardToRow(p[1], p[1].row, p[1].holder, p[0]);
