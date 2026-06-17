@@ -292,6 +292,78 @@
 <div data-title="Toggle sound effects" id="toggle-sfx" class="center deck-menu settings-button"><img src="svg/sfx.svg"></img></div>
 <div data-title="Toggle game messages" id="toggle-notifications" class="center deck-menu settings-button"><img src="svg/notification.svg"></img></div>
 
+<!-- Multiplayer Lobby Overlay -->
+<div id="mp-lobby-overlay" class="mp-overlay">
+	<div class="mp-modal">
+		<div class="mp-logo-container">
+			<img src="img/icons/deck_shield_realms.png" class="mp-logo-shield" />
+			<h1 class="mp-title">GWENT ONLINE</h1>
+			<p class="mp-subtitle">Classic Witcher 3 Card Game Remake</p>
+		</div>
+
+		<!-- Step 1: Mode Selection -->
+		<div id="mp-step-mode" class="mp-step active">
+			<div class="mp-input-group">
+				<label for="mp-player-name" class="mp-label">Enter Your Name</label>
+				<input type="text" id="mp-player-name" class="mp-input" placeholder="Geralt" maxlength="15" />
+			</div>
+			<div class="mp-buttons-vertical">
+				<button id="btn-play-ai" class="mp-btn mp-btn-secondary">Play vs AI (Singleplayer)</button>
+				<button id="btn-play-online" class="mp-btn mp-btn-primary">Play with Friend (Online P2P)</button>
+			</div>
+		</div>
+
+		<!-- Step 2: Online Setup -->
+		<div id="mp-step-online" class="mp-step">
+			<div class="mp-buttons-vertical">
+				<button id="btn-host-match" class="mp-btn mp-btn-primary">Host a Match</button>
+				<div class="mp-divider">or</div>
+				<div class="mp-input-group">
+					<label for="mp-join-room-id" class="mp-label">Join Room ID</label>
+					<div class="mp-input-row">
+						<input type="text" id="mp-join-room-id" class="mp-input" placeholder="Enter room ID..." />
+						<button id="btn-join-match" class="mp-btn mp-btn-primary mp-btn-inline">Join</button>
+					</div>
+				</div>
+				<button id="btn-back-to-mode" class="mp-btn mp-btn-link">← Back</button>
+			</div>
+		</div>
+
+		<!-- Step 3: Lobby (Waiting) -->
+		<div id="mp-step-lobby" class="mp-step">
+			<div class="mp-lobby-status">
+				<div class="mp-spinner"></div>
+				<p id="mp-lobby-status-text">Creating room...</p>
+			</div>
+			
+			<div id="mp-room-info" class="mp-room-info hide">
+				<p class="mp-label">Invite Link</p>
+				<div class="mp-copy-row">
+					<input type="text" id="mp-invite-link" class="mp-input" readonly />
+					<button id="btn-copy-link" class="mp-btn mp-btn-secondary mp-btn-inline">Copy</button>
+				</div>
+				<p class="mp-hint">Send this link to your friend to join the match.</p>
+			</div>
+
+			<div class="mp-lobby-players">
+				<div class="mp-lobby-player me">
+					<span class="mp-player-dot online"></span>
+					<span id="mp-player-name-me">You</span>
+				</div>
+				<div class="mp-lobby-player op">
+					<span class="mp-player-dot" id="mp-player-dot-op"></span>
+					<span id="mp-player-name-op" class="waiting">Waiting for player 2...</span>
+				</div>
+			</div>
+
+			<div class="mp-buttons-vertical">
+				<button id="btn-disconnect" class="mp-btn mp-btn-link">Cancel and Quit</button>
+			</div>
+		</div>
+	</div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="text/javascript" src="common.js"></script>
 <script type="text/javascript" src="cards.js"></script>
 <script type="text/javascript" src="decks.js"></script>
@@ -299,6 +371,7 @@
 <script type="text/javascript" src="factions.js"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script type="text/javascript" src="gwent.js"></script>
+<script type="text/javascript" src="multiplayer.js"></script>
 </body>
 
 </html>
