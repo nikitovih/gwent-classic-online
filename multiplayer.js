@@ -937,3 +937,24 @@ factions.skellige.helper = async player => {
 		await board.toRow(card, player.grave);
 	}
 };
+
+// Hide Rematch and New Game buttons on the end screen in multiplayer mode
+const originalEndGame = Game.prototype.endGame;
+Game.prototype.endGame = async function() {
+	const res = await originalEndGame.call(this);
+	if (online.isMultiplayer) {
+		const buttons = this.endScreen.getElementsByTagName("button");
+		if (buttons[1]) buttons[1].classList.add("hide");
+		if (buttons[2]) buttons[2].classList.add("hide");
+	}
+	return res;
+};
+
+const originalReturnToCustomization = Game.prototype.returnToCustomization;
+Game.prototype.returnToCustomization = function() {
+	const buttons = this.endScreen.getElementsByTagName("button");
+	if (buttons[1]) buttons[1].classList.remove("hide");
+	if (buttons[2]) buttons[2].classList.remove("hide");
+	return originalReturnToCustomization.call(this);
+};
+
