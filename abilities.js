@@ -167,9 +167,22 @@ var ability_dict = {
 				return;
 			let wrapper = {card : null};
 			if (game.randomRespawn) {
-				const cards = grave.findCardsRandom(c => c.isUnit());
-				if (cards.length > 0)
-					wrapper.card = cards[0];
+				if (typeof online !== 'undefined' && online.isMultiplayer) {
+					// Random respawn rolls Math.random independently on each client,
+					// so the active player must roll once and broadcast the result.
+					const pool = card.holder.grave.findCards(c => c.isUnit());
+					if (card.holder === player_me) {
+						wrapper.card = pool[Math.floor(Math.random() * pool.length)];
+						online.sendChoice('random_respawn', { cardUid: wrapper.card.uid, cardName: wrapper.card.name });
+					} else {
+						const choice = await online.waitForChoice('random_respawn');
+						wrapper.card = getCardByUidWithNameFallback(choice.cardUid, choice.cardName, card.holder.grave, card.holder);
+					}
+				} else {
+					const cards = grave.findCardsRandom(c => c.isUnit());
+					if (cards.length > 0)
+						wrapper.card = cards[0];
+				}
 			} else if (card.holder.controller instanceof ControllerAI)
 				wrapper.card =  card.holder.controller.medic(card, grave);
 			else
@@ -310,7 +323,11 @@ var ability_dict = {
 	emhyr_emperor: {
 		description: "Look at 3 random cards from your opponent's hand.",
 		activated: async card => {
-			if (card.holder.controller instanceof ControllerAI)
+			// Only the player who activated the leader peeks. In multiplayer the
+			// remote replay (card.holder === player_op) must NOT pop a carousel on
+			// the other client - that would block the action queue and show a
+			// different random sample.
+			if (card.holder.controller instanceof ControllerAI || card.holder !== player_me)
 				return;
 			let container = new CardContainer();
 			container.cards = card.holder.opponent().hand.findCardsRandom(() => true, 3);

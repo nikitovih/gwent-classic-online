@@ -166,7 +166,14 @@ class OnlineManager {
 		
 		this.pendingResolvers = {};
 		this.bufferedChoices = {};
-		
+
+		// Serializes every game-state mutation (local plays AND incoming remote moves)
+		// so that turn transitions never run concurrently. Without this, a remote
+		// move could be applied while the local turn-end animation is still running,
+		// leaving the two clients disagreeing about whose turn it is (turn hangs /
+		// "both players have the turn").
+		this._actionLock = Promise.resolve();
+
 		this.init();
 	}
 
@@ -415,7 +422,7 @@ class OnlineManager {
 					let card = getCardByUidWithNameFallback(data.cardUid, data.cardName, player_op.hand, player_op);
 					if (!card) {
 						console.error('PLAY_CARD: card not found', data.cardName);
-						player_op.endTurn();
+						await player_op.endTurn();
 						return;
 					}
 					let row = data.rowIndex === -1 ? weather : board.row[5 - data.rowIndex];
@@ -431,7 +438,7 @@ class OnlineManager {
 					let card = getCardByUidWithNameFallback(data.cardUid, data.cardName, player_op.hand, player_op);
 					if (!card) {
 						console.error('SCORCH: card not found', data.cardName);
-						player_op.endTurn();
+						await player_op.endTurn();
 						return;
 					}
 					await player_op.playCardAction(card, async () => await ability_dict["scorch"].activated(card));
@@ -443,24 +450,24 @@ class OnlineManager {
 					let decoy = getCardByUidWithNameFallback(data.decoyUid, data.decoyName, player_op.hand, player_op);
 					if (!decoy) {
 						console.error('DECOY: decoy card not found', data.decoyName);
-						player_op.endTurn();
+						await player_op.endTurn();
 						return;
 					}
 					let row = board.row[5 - data.targetRowIndex];
 					let target = getCardByUidWithNameFallback(data.targetCardUid, data.targetCardName, row, player_op.opponent());
 					if (target) {
-						board.toHand(target, row);
+						await board.toHand(target, row);
 						await board.moveTo(decoy, row, player_op.hand);
 					} else {
 						console.error('DECOY: target card not found', data.targetCardName);
 					}
-					player_op.endTurn();
+					await player_op.endTurn();
 				});
 				break;
 				
 			case 'PASS':
 				this.executeRemoteMove(async () => {
-					player_op.passRound();
+					await player_op.passRound();
 				});
 				break;
 				
@@ -632,15 +639,28 @@ class OnlineManager {
 		}
 	}
 
+	// Runs `fn` with exclusive access to the game state. Calls are queued and run
+	// strictly one after another (FIFO), each fully completing — including its turn
+	// transition — before the next begins. Choice/handshake messages bypass this
+	// (they must be free to resolve while a queued move is waiting on them).
+	runExclusive(fn) {
+		const run = this._actionLock.then(() => fn());
+		// Keep the chain alive even if a move throws, so the queue never stalls.
+		this._actionLock = run.then(() => {}, () => {});
+		return run;
+	}
+
 	async executeRemoteMove(actionFn) {
-		isSimulatingRemoteMove = true;
-		try {
-			await actionFn();
-		} catch (e) {
-			console.error('Error executing remote move:', e);
-		} finally {
-			isSimulatingRemoteMove = false;
-		}
+		return this.runExclusive(async () => {
+			isSimulatingRemoteMove = true;
+			try {
+				await actionFn();
+			} catch (e) {
+				console.error('Error executing remote move:', e);
+			} finally {
+				isSimulatingRemoteMove = false;
+			}
+		});
 	}
 
 	resetLobbyState() {
@@ -866,82 +886,149 @@ DeckMaker.prototype.startNewGame = function() {
 	}
 };
 
-// Sync player pass
+// Sync player pass.
+// NOTE: we key "is this a local action" off player identity (this === player_me),
+// NOT off isSimulatingRemoteMove. The remote replay always acts on player_op, while
+// the local player only ever passes their own round. Using the flag here is unsafe:
+// it stays true through the remote move's endTurn, which already re-enables the local
+// player, so an eager click in that window would be misread as a remote move and the
+// PASS/PLAY would never be sent (turn "not transmitted" / desync).
 const originalPassRound = Player.prototype.passRound;
 Player.prototype.passRound = function() {
-	if (online.isMultiplayer && !isSimulatingRemoteMove) {
-		online.sendAction({ type: 'PASS' });
+	if (!online.isMultiplayer || this !== player_me) {
+		return originalPassRound.call(this);
 	}
-	return originalPassRound.call(this);
+	// Local pass: serialize against remote moves and await the full turn transition.
+	return online.runExclusive(async () => {
+		online.sendAction({ type: 'PASS' });
+		await originalPassRound.call(this);
+	});
 };
 
-// Sync leader activation
+// Sync leader activation (same identity-based reasoning as passRound).
 const originalActivateLeader = Player.prototype.activateLeader;
 Player.prototype.activateLeader = function() {
-	if (online.isMultiplayer && !isSimulatingRemoteMove) {
-		online.sendAction({ type: 'LEADER' });
+	if (!online.isMultiplayer || this !== player_me) {
+		return originalActivateLeader.call(this);
 	}
-	return originalActivateLeader.call(this);
+	return online.runExclusive(async () => {
+		online.sendAction({ type: 'LEADER' });
+		await originalActivateLeader.call(this);
+	});
 };
 
-// Sync playing standard unit cards or weather cards - now uses card UID, card name, and sent after placement
+// Replay of remote card plays runs through playCardAction (player_op is a passive
+// ControllerOnline). Local human plays are intercepted in UI.selectRow below.
 const originalPlayCardAction = Player.prototype.playCardAction;
 Player.prototype.playCardAction = async function(card, action) {
 	if (!online.isMultiplayer) {
 		return await originalPlayCardAction.call(this, card, action);
 	}
-	
+
+	// Remote replay: apply the action and finish the turn. Already serialized by
+	// executeRemoteMove and already animated on the originating client.
 	if (isSimulatingRemoteMove) {
 		await action();
-		this.endTurn();
+		await this.endTurn();
 		return;
 	}
 
+	// Direct local play (not via selectRow). Capture the target row BEFORE the
+	// preview is hidden, since hidePreview() clears ui.lastRow.
+	const rowIndex = board.row.indexOf(ui.lastRow);
 	ui.showPreviewVisuals(card);
 	await sleep(1000);
 	ui.hidePreview(card);
-	
+
 	await action();
-	
-	let rowIndex = board.row.indexOf(ui.lastRow);
+
 	if (card.name === "Scorch") {
-		online.sendAction({
-			type: 'SCORCH',
-			cardUid: card.uid,
-			cardName: card.name
-		});
+		online.sendAction({ type: 'SCORCH', cardUid: card.uid, cardName: card.name });
 	} else if (card.name !== "Decoy") {
-		online.sendAction({
-			type: 'PLAY_CARD',
-			cardUid: card.uid,
-			cardName: card.name,
-			rowIndex: rowIndex
-		});
+		online.sendAction({ type: 'PLAY_CARD', cardUid: card.uid, cardName: card.name, rowIndex: rowIndex });
 	}
-	
-	this.endTurn();
+
+	await this.endTurn();
 };
 
-// Sync decoy swap - now uses card UID and name for decoy and target identification
+// Sync playing of standard unit / special / weather / scorch cards. The local
+// human plays through UI.selectRow (NOT Player.playCardAction), so the move sync
+// must live here. The action is sent AFTER placement so that any choice packets
+// produced by placed abilities (e.g. medic carousels) are delivered first.
+const originalSelectRow = UI.prototype.selectRow;
+UI.prototype.selectRow = async function(row) {
+	// Only intercept genuine local card plays. selectRow is a local UI click handler
+	// only (remote plays are replayed through playCardAction), so we gate on "it's my
+	// turn" rather than isSimulatingRemoteMove — the flag is still set during the
+	// remote move's turn transition that re-enables us, which would wrongly suppress a
+	// quick local play. Everything else (viewing a row, decoy targeting, agile-row
+	// selection via placedEffectsActive) falls through to the original handler.
+	if (!online.isMultiplayer || game.placedEffectsActive
+		|| game.currPlayer !== player_me || !this.previewCard
+		|| this.previewCard.name === "Decoy") {
+		return await originalSelectRow.call(this, row);
+	}
+
+	const card = this.previewCard;
+	const isScorch = card.name === "Scorch";
+	const rowIndex = board.row.indexOf(row); // captured before any hidePreview
+
+	return online.runExclusive(async () => {
+		this.lastRow = row;
+		this.hidePreview();
+		this.enablePlayer(false);
+
+		// Brief "card being played" preview, matching the originating-side pacing.
+		ui.showPreviewVisuals(card);
+		await sleep(1000);
+		ui.hidePreview();
+
+		if (isScorch) {
+			await ability_dict["scorch"].activated(card);
+			online.sendAction({ type: 'SCORCH', cardUid: card.uid, cardName: card.name });
+		} else {
+			await board.moveTo(card, row, card.holder.hand);
+			online.sendAction({ type: 'PLAY_CARD', cardUid: card.uid, cardName: card.name, rowIndex: rowIndex });
+		}
+
+		await card.holder.endTurn();
+	});
+};
+
+// Sync decoy swap - uses card UID and name for decoy and target identification
 const originalSelectCard = UI.prototype.selectCard;
 UI.prototype.selectCard = async function(card) {
-	if (online.isMultiplayer && this.previewCard && this.previewCard.name === "Decoy" && !isSimulatingRemoteMove) {
-		let decoyUid = this.previewCard.uid;
-		let targetRow = this.lastRow;
-		let targetRowIndex = board.row.indexOf(targetRow);
-		let targetCardIndexInRow = targetRow.cards.indexOf(card);
-		
+	// Local decoy play only (remote decoys are replayed via the DECOY handler). Gate on
+	// turn ownership, not isSimulatingRemoteMove (see selectRow/passRound note).
+	if (!(online.isMultiplayer && this.previewCard && this.previewCard.name === "Decoy"
+		&& game.currPlayer === player_me)) {
+		return await originalSelectCard.call(this, card);
+	}
+
+	const decoy = this.previewCard;
+	const targetRow = this.lastRow;
+	// Not a valid decoy target (clicked elsewhere) -> let the original handle it.
+	if (!targetRow || !targetRow.cards.includes(card)) {
+		return await originalSelectCard.call(this, card);
+	}
+	const targetRowIndex = board.row.indexOf(targetRow);
+
+	return online.runExclusive(async () => {
 		online.sendAction({
 			type: 'DECOY',
-			decoyUid: decoyUid,
-			decoyName: this.previewCard.name,
+			decoyUid: decoy.uid,
+			decoyName: decoy.name,
 			targetRowIndex: targetRowIndex,
-			targetCardIndexInRow: targetCardIndexInRow,
 			targetCardUid: card.uid,
 			targetCardName: card.name
 		});
-	}
-	return await originalSelectCard.call(this, card);
+
+		this.hidePreview();
+		this.enablePlayer(false);
+		await board.toHand(card, targetRow);
+		await board.moveTo(decoy, targetRow, decoy.holder.hand);
+		await decoy.holder.endTurn();
+	});
 };
 
 // Sync initial redraw done
@@ -964,12 +1051,21 @@ Game.prototype.initialRedraw = async function() {
 	
 	// Wait for remote player redraw done
 	await sleepUntil(() => online.opponentRedrawDone === true, 100);
+
+	// Discard any choice packets that may have been buffered during the redraw
+	// phase so the first real in-game carousel starts from a clean slate.
+	online.pendingResolvers = {};
+	online.bufferedChoices = {};
 };
 
 // Sync Carousel Selection - now with robust card name matching fallbacks
 const originalQueueCarousel = UI.prototype.queueCarousel;
 UI.prototype.queueCarousel = async function(container, count, action, predicate, bSort, bQuit, title) {
-	if (!online.isMultiplayer) {
+	// Only sync carousels that happen during actual gameplay (currPlayer is set).
+	// During the initial redraw currPlayer is still null and the swap is already
+	// synced through the dedicated REDRAW message; sending 'carousel' choices here
+	// would pollute the buffer and corrupt the first in-game carousel (e.g. medic).
+	if (!online.isMultiplayer || !game.currPlayer) {
 		return await originalQueueCarousel.call(this, container, count, action, predicate, bSort, bQuit, title);
 	}
 

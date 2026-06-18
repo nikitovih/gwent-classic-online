@@ -550,7 +550,7 @@ class Player {
 	passRound(){
 		this.setPassed(true);
 		EventManager.roundPassed.dispatch(this, game.roundCount);
-		this.endTurn();
+		return this.endTurn();
 	}
 	
 	// Plays a scorch card
@@ -586,7 +586,9 @@ class Player {
 		}
 		document.getElementById("stats-" + this.tag).classList.remove("current-turn");
 		this.elem_leader.children[1].classList.add("hide");
-		game.endTurn()
+		// Return the promise so callers (esp. the multiplayer layer) can await the
+		// full turn transition (notifications + currPlayer flip) before continuing.
+		return game.endTurn();
 	}
 	
 	// Tells the the Player if it won the round. May damage health.
@@ -613,7 +615,7 @@ class Player {
 		ui.hidePreview(this.leader);
 		await this.leader.activated[0](this.leader, this);
 		this.disableLeader();
-		this.endTurn();
+		await this.endTurn();
 	}
 	
 	// Disable access to leader ability and toggles leader visuals to off state
@@ -1250,7 +1252,7 @@ class Weather extends CardContainer {
 		if (card.name === "Clear Weather"){
 			// TODO Sunlight animation
 			await sleep(500);
-			this.clearWeather();
+			await this.clearWeather();
 		} else {
 			this.changeWeather(card, x => ++this.types[x].count === 1, (r,t) => r.addOverlay(t.name));
 			if (isDuplicate)
