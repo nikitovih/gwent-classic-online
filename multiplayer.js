@@ -657,6 +657,17 @@ class OnlineManager {
 				await actionFn();
 			} catch (e) {
 				console.error('Error executing remote move:', e);
+				// Safety net: a thrown replay can skip its endTurn and leave the turn
+				// pointer stuck on the remote player, hard-freezing both clients. If the
+				// turn never advanced, force it so the game keeps going (a minor board
+				// glitch is far better than a frozen match).
+				try {
+					if (typeof game !== 'undefined' && game.currPlayer === player_op) {
+						await player_op.endTurn();
+					}
+				} catch (e2) {
+					console.error('Remote-move recovery failed:', e2);
+				}
 			} finally {
 				isSimulatingRemoteMove = false;
 			}
