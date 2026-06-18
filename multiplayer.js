@@ -1,5 +1,10 @@
 "use strict";
 
+// Bump this on every gameplay/protocol change. Both clients exchange it during the
+// handshake and warn loudly if they differ — a version mismatch (usually one side
+// running stale cached code) is the #1 cause of "the game desynced / froze".
+const BUILD_VERSION = '2026-06-18-d';
+
 // Helper function to shuffle an array
 function shuffleArray(array) {
 	for (let i = array.length - 1; i > 0; i--) {
@@ -180,6 +185,16 @@ class OnlineManager {
 	init() {
 		this.setupDOM();
 		this.checkUrlParams();
+		this.showVersionBadge();
+	}
+
+	// Discreet build-version badge so both players can eyeball that they match.
+	showVersionBadge() {
+		const el = document.createElement('div');
+		el.id = 'mp-version-badge';
+		el.textContent = 'v' + BUILD_VERSION;
+		el.style.cssText = 'position:fixed;bottom:4px;right:6px;font-size:10px;color:#caa86a;opacity:.55;z-index:99999;pointer-events:none;font-family:monospace';
+		document.body.appendChild(el);
 	}
 
 	setupDOM() {
@@ -354,10 +369,11 @@ class OnlineManager {
 			this.isMultiplayer = true;
 			this.updateLobbyUI();
 			
-			// Exchange names
+			// Exchange names + code versions
 			this.conn.send({
 				type: 'HANDSHAKE',
-				name: this.playerName
+				name: this.playerName,
+				version: BUILD_VERSION
 			});
 		});
 
@@ -379,15 +395,28 @@ class OnlineManager {
 			case 'HANDSHAKE':
 				this.opponentName = data.name;
 				this.updateLobbyUI();
-				
+
+				// Warn on version mismatch — the usual root cause of online desyncs.
+				if (data.version !== BUILD_VERSION) {
+					console.error(`Version mismatch: you=${BUILD_VERSION}, opponent=${data.version || 'unknown (old build)'}`);
+					alert(
+						"⚠ Version mismatch!\n\n" +
+						"You: " + BUILD_VERSION + "\n" +
+						"Opponent: " + (data.version || "unknown (old build)") + "\n\n" +
+						"You are running different versions of the game, which WILL cause desyncs.\n" +
+						"Both players must open the SAME link and hard-refresh (Ctrl+F5 / Cmd+Shift+R), then start a new match."
+					);
+				}
+
 				if (this.isHost) {
 					// Host replies with handshake too
 					this.conn.send({
 						type: 'HANDSHAKE',
-						name: this.playerName
+						name: this.playerName,
+						version: BUILD_VERSION
 					});
 				}
-				
+
 				// Wait 1.5 seconds then enter customization
 				setTimeout(() => {
 					document.getElementById('mp-lobby-overlay').classList.add('hide');
